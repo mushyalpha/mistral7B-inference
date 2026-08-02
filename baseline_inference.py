@@ -25,7 +25,7 @@ def load_model():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
-        dtype=torch.float16,         # halve VRAM usage for RTX 3090
+        torch_dtype=torch.float16,   # halve VRAM usage for RTX 3090
         device_map="auto",           # auto spread parts of the model across GPU
     )
     model.eval()
