@@ -1,0 +1,35 @@
+.env
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Model weights (too large for git)
+mistral-7b-instruct-awq-4bit/
+*.bin
+*.safetensors
+*.gguf
+
+# HuggingFace cache
+.cache/
+~/.cache/huggingface/
+
+# Benchmark output
+benchmark_results.csv
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Docker
+.dockerignore
+
+# OS
+.DS_Store
+Thumbs.db
