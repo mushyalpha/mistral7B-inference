@@ -19,8 +19,9 @@ mistral-7b-instruct-awq-4bit/
 .cache/
 ~/.cache/huggingface/
 
-# Benchmark output
-benchmark_results.csv
+# Benchmark output (regenerable raw data; plots/tables in results/plots are kept)
+results/*.csv
+results/outputs_*.json
 *.log
 
 # Jupyter

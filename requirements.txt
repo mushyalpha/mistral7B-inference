@@ -1,0 +1,9 @@
+torch>=2.1
+transformers>=4.43
+accelerate>=0.33
+vllm>=0.5.4
+datasets>=2.20
+pandas>=2.2
+matplotlib>=3.8
+seaborn>=0.13
+tabulate>=0.9
