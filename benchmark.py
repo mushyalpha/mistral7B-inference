@@ -157,7 +157,18 @@ def load_hf(dtype: str):
 
 def load_vllm(dtype: str, gpu_memory_utilization: float):
     from vllm import LLM
-    return LLM(model=MODEL_ID, dtype=dtype, gpu_memory_utilization=gpu_memory_utilization)
+    import os
+    # On RunPod, /workspace is the large persistent disk; /root fills up fast.
+    # Respect HF_HOME if set, otherwise fall back to /workspace cache.
+    default_dl_dir = "/workspace/.hf_cache/hub"
+    download_dir = os.environ.get("HUGGINGFACE_HUB_CACHE", default_dl_dir)
+    os.makedirs(download_dir, exist_ok=True)
+    return LLM(
+        model=MODEL_ID,
+        dtype=dtype,
+        gpu_memory_utilization=gpu_memory_utilization,
+        download_dir=download_dir,
+    )
 
 
 def main():
