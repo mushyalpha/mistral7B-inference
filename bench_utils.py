@@ -6,10 +6,12 @@ torch) so it can be imported by both the HF and vLLM code paths.
 import csv
 import os
 import random
+import subprocess
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 import torch
 
@@ -27,41 +29,91 @@ def set_all_seeds(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def _nvidia_smi_used_mb(gpu_index: int = 0) -> Optional[float]:
+    """Device-wide GPU memory currently in use, in MB, via `nvidia-smi`.
+
+    This is process-agnostic: it reports actual memory committed on the GPU
+    regardless of which process allocated it. That matters because vLLM's
+    engine can run its forward passes in a separate worker process (its
+    multiprocessing/Ray executor), in which case `torch.cuda.*` queried from
+    the driver process that called `llm.generate()` sees zero allocations no
+    matter how much VRAM vLLM is actually using.
+    """
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits", "-i", str(gpu_index)],
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+        return float(out.decode().strip().splitlines()[0])
+    except Exception:
+        return None
+
+
+class _GpuMemorySampler:
+    """Background thread that polls `nvidia-smi` so we capture the peak
+    device-wide memory usage over an arbitrary code block, independent of
+    which process (or subprocess) did the allocating."""
+
+    def __init__(self, gpu_index: int = 0, interval_s: float = 0.05):
+        self.gpu_index = gpu_index
+        self.interval_s = interval_s
+        self._peak_mb = 0.0
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self.available = _nvidia_smi_used_mb(gpu_index) is not None
+
+    def _poll_loop(self) -> None:
+        while not self._stop_event.is_set():
+            used = _nvidia_smi_used_mb(self.gpu_index)
+            if used is not None:
+                self._peak_mb = max(self._peak_mb, used)
+            time.sleep(self.interval_s)
+
+    def start(self) -> None:
+        if not self.available:
+            return
+        self._peak_mb = _nvidia_smi_used_mb(self.gpu_index) or 0.0
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._thread.start()
+
+    def stop_and_get_peak_gb(self) -> float:
+        if not self.available:
+            return 0.0
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1)
+        return self._peak_mb / 1024.0
+
+
 @contextmanager
-def track_peak_memory_gb():
-    """Tracks true peak GPU memory for both HF (dynamic allocation) and vLLM
-    (pre-allocated KV-cache pool).
+def track_peak_memory_gb(gpu_index: int = 0):
+    """Yields a dict that holds `peak_gb` once the block exits: the highest
+    device-wide GPU memory usage observed during the block.
 
-    HF allocates tensors dynamically inside each batch call, so
-    ``max_memory_allocated()`` after a ``reset_peak_memory_stats()`` gives the
-    correct high-water mark.
-
-    vLLM pre-allocates its entire KV-cache pool at engine init, meaning nothing
-    new is allocated during inference and the allocation-delta is always ~0 GB.
-    For that case we snapshot ``memory_reserved()`` (total GPU memory currently
-    held by PyTorch's caching allocator) *before* and *after* the batch and
-    report the post-batch value, which correctly reflects the pre-allocated pool.
-
-    We take the max of both methods so the result is accurate for either engine.
+    Prefers polling `nvidia-smi` (works correctly no matter which process
+    does the allocating -- crucial for vLLM's worker-process executors).
+    Falls back to torch's in-process allocator stats, then to 0.0, if
+    `nvidia-smi` isn't on PATH (e.g. CPU-only dev boxes).
     """
     result = {"peak_gb": 0.0}
-    if not torch.cuda.is_available():
-        yield result
-        return
+    sampler = _GpuMemorySampler(gpu_index=gpu_index)
 
-    torch.cuda.synchronize()
-    torch.cuda.reset_peak_memory_stats()
-    reserved_before = torch.cuda.memory_reserved() / 1e9  # snapshot pre-batch
+    if sampler.available:
+        sampler.start()
+    elif torch.cuda.is_available():
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+
     try:
         yield result
     finally:
-        torch.cuda.synchronize()
-        # Allocation-delta method (works for HF dynamic batching)
-        allocated_peak = torch.cuda.max_memory_allocated() / 1e9
-        # Reserved-memory method (works for vLLM pre-allocated pool)
-        reserved_after = torch.cuda.memory_reserved() / 1e9
-        # Use whichever is larger — correct for both engines
-        result["peak_gb"] = max(allocated_peak, reserved_before, reserved_after)
+        if sampler.available:
+            result["peak_gb"] = sampler.stop_and_get_peak_gb()
+        elif torch.cuda.is_available():
+            torch.cuda.synchronize()
+            result["peak_gb"] = torch.cuda.max_memory_allocated() / 1e9
 
 
 def percentiles(values: List[float], ps: Iterable[int] = (50, 90, 95, 99)) -> Dict[str, float]:
