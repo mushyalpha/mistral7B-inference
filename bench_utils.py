@@ -29,18 +29,39 @@ def set_all_seeds(seed: int) -> None:
 
 @contextmanager
 def track_peak_memory_gb():
-    """Resets CUDA peak-memory stats on enter; yields a dict holding `peak_gb`
-    once the block exits (0.0 on CPU-only machines)."""
+    """Tracks true peak GPU memory for both HF (dynamic allocation) and vLLM
+    (pre-allocated KV-cache pool).
+
+    HF allocates tensors dynamically inside each batch call, so
+    ``max_memory_allocated()`` after a ``reset_peak_memory_stats()`` gives the
+    correct high-water mark.
+
+    vLLM pre-allocates its entire KV-cache pool at engine init, meaning nothing
+    new is allocated during inference and the allocation-delta is always ~0 GB.
+    For that case we snapshot ``memory_reserved()`` (total GPU memory currently
+    held by PyTorch's caching allocator) *before* and *after* the batch and
+    report the post-batch value, which correctly reflects the pre-allocated pool.
+
+    We take the max of both methods so the result is accurate for either engine.
+    """
     result = {"peak_gb": 0.0}
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-        torch.cuda.reset_peak_memory_stats()
+    if not torch.cuda.is_available():
+        yield result
+        return
+
+    torch.cuda.synchronize()
+    torch.cuda.reset_peak_memory_stats()
+    reserved_before = torch.cuda.memory_reserved() / 1e9  # snapshot pre-batch
     try:
         yield result
     finally:
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-            result["peak_gb"] = torch.cuda.max_memory_allocated() / 1e9
+        torch.cuda.synchronize()
+        # Allocation-delta method (works for HF dynamic batching)
+        allocated_peak = torch.cuda.max_memory_allocated() / 1e9
+        # Reserved-memory method (works for vLLM pre-allocated pool)
+        reserved_after = torch.cuda.memory_reserved() / 1e9
+        # Use whichever is larger — correct for both engines
+        result["peak_gb"] = max(allocated_peak, reserved_before, reserved_after)
 
 
 def percentiles(values: List[float], ps: Iterable[int] = (50, 90, 95, 99)) -> Dict[str, float]:
