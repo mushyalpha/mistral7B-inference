@@ -81,10 +81,11 @@ def plot_hero_chart(agg: pd.DataFrame, out_dir: Path) -> None:
         ax.set_xlabel("Concurrent requests (batch size)")
         ax.set_ylabel("Throughput (tokens/sec)")
         ax.set_title(
-            f"vLLM vs. HuggingFace Transformers -- Mistral-7B\n"
+            f"vLLM vs. HuggingFace Transformers - Mistral-7B\n"
             f"({input_choice} prompts, {output_choice}-token generations)",
             fontsize=16, fontweight="bold", pad=14,
         )
+        ax.margins(y=0.18)  # headroom so the top data point + its annotation clear the title
 
         max_conc = subset["concurrency"].max()
         at_max = subset[subset["concurrency"] == max_conc].set_index("Engine")["throughput_mean"]
@@ -93,7 +94,7 @@ def plot_hero_chart(agg: pd.DataFrame, out_dir: Path) -> None:
             ax.annotate(
                 f"{speedup:.1f}x faster\nat batch {max_conc}",
                 xy=(max_conc, at_max["vLLM"]),
-                xytext=(-140, 5), textcoords="offset points",
+                xytext=(-150, -55), textcoords="offset points",
                 fontsize=15, fontweight="bold", color=PALETTE["vLLM"],
                 arrowprops=dict(arrowstyle="-|>", color=PALETTE["vLLM"], lw=2),
             )
