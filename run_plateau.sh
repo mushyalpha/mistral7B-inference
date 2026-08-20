@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# We use a separate CSV so we don't mix with previous runs
+# a separate CSV so we don't mix with previous runs
 CSV="results/plateau_results.csv"
 rm -f "$CSV"
 
